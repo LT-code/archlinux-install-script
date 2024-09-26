@@ -1,7 +1,7 @@
 {
 	"install": {
-		"ansible_local": 1,
-		"on_usb_key": 0
+		"ansible_local": true,
+		"on_usb_key": false
 	},
 	"machine": {
 		"name": "ArchLinux",
@@ -11,19 +11,18 @@
 	},
 	"disk": {
 		"name": "/dev/xxx",
-		"partitioning": 1,
 		"prefix_num": "p",
-		"wipe": 1
+		"wipe": true
 	},
 	"partitions": [
-		{ "size": "400M", "type": "vfat", "path": "/boot"},
-		{ "size": "ALL", "type": "lvm", "vol_name": "vol_root",
+		{ "number": 1, "create": true, "format": true, "size": "400M", "type": "vfat", "path": "/boot"},
+		{ "number": 2, "create": true, "format": true, "size": "ALL", "type": "lvm", "vol_name": "vol_root",
 			"luks_password": "password",
 			"partitions": [
-				{"name": "swap", "type": "swap", "size": "8G"},
-				{"name": "root", "type": "ext4", "size": "20G", "path": "/"},
-				{"name": "var", "type": "ext4", "size": "25G", "path": "/var"},
-				{"name": "home", "type": "ext4", "size": "ALL", "path": "/home"}
+				{"name": "swap", "create": true, "format": true, "type": "swap", "size": "8G"},
+				{"name": "root", "create": true, "format": true, "type": "ext4", "size": "20G", "path": "/"},
+				{"name": "var", "create": true, "format": true, "type": "ext4", "size": "25G", "path": "/var"},
+				{"name": "home","create": true, "format": true, "type": "ext4", "size": "ALL", "path": "/home"}
 			]
 		}
 	]

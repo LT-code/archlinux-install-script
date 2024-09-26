@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 if [[ "$#" -ne "1" ]]; then
 	echo "usage : <command> <json config file>"
@@ -11,7 +12,7 @@ if [ ! -f $1 ]; then
 fi
 JSON_CONFIG_FILE=$1
 
-yes | pacman-key -Sy archlinux-keyring
+yes | pacman -Sy archlinux-keyring
 yes | pacman -Sy jq arch-install-scripts
 
 _jq_f() {
@@ -32,7 +33,6 @@ INSTALL_PATH=/mnt
 # FROM JSON FILE
 DISK_USED=$(_jq_f ".disk.name")
 DISK_PREFIX=$(_jq_f '.disk.prefix_num')
-DISK_PARTITIONING=$(_jq_f ".disk.partitioning")
 DISK_CLEAR=$(_jq_f ".disk.wipe")
 
 INSTALL_ON_USB_KEY=$(_jq_f ".install.on_usb_key")
@@ -46,6 +46,7 @@ MACHINE_KEYBOARD=$(_jq_f ".machine.keyboard")
 LVM_USED=0
 DISK_ENCRYPTED=0
 SWAP_DISK_NAME=""
+DISK_LUKS_NAME="archinstall_luks_root"
 
 ######################################################
 # functions
@@ -155,7 +156,7 @@ disk_mount()
 	DISK=$1
 	PATH_TO_MOUNT=$INSTALL_PATH/$2
 	
-	mkdir $PATH_TO_MOUNT
+	mkdir -p $PATH_TO_MOUNT
 	
 	case $2 in
     null)
@@ -176,13 +177,17 @@ disk_setup_luks()
 
 	modprobe dm-crypt
 	modprobe dm-mod
+
+  vgchange -an
+  cryptsetup close $DISK_LUKS_NAME | true
+
 	(
 		echo cryptsetup luksFormat --type luks2 --cipher aes-xts-plain64 --iter-time 2000 --pbkdf argon2id --use-urandom -v -s 512 -h sha512 $DISK_FULL
 		echo $DISK_PASSWORD 
 	) | bash
 
 	(
-		echo cryptsetup open $DISK_FULL luks_root
+		echo cryptsetup open $DISK_FULL $DISK_LUKS_NAME
 		echo $DISK_PASSWORD
 	) | bash
 
@@ -215,54 +220,53 @@ arch_exec_params()
 #echo ======== Get date and time from server ==========
 timedatectl set-ntp true
 
-if [ $DISK_PARTITIONING -eq 1 ]
-then
+if $DISK_CLEAR; then
   echo ==============Wiping partitionning disk=================
-  if [ $DISK_CLEAR -eq 1 ]; then
-    disk_init
-		wipefs -a -ff $DISK_USED
 
-    # disk label type to gpt
-	  (
-	    echo mklabel gpt # exec command
-	    echo quit # param
-	  ) | parted $DISK_USED
-  fi
+  disk_init
+	wipefs -a -ff $DISK_USED
+
+  # disk label type to gpt
+  (
+    echo mklabel gpt # exec command
+    echo quit # param
+  ) | parted $DISK_USED
 fi
 
 echo ================ Partitionning ===================
-counter=1
 declare -xA mount_array
-
 for part in $(jq -c '.partitions[]' $JSON_CONFIG_FILE);
 do
 	luks="$(_jq $part '.luks_password')"
 	part_type="$(_jq $part '.type')"
 	size=$(_jq $part '.size')
+  do_create=$(_jq $part '.create')
+  do_format=$(_jq $part '.format')
+	partition_number=$(_jq $part '.number')
 	echo ========================= $DISK_PREFIX
 	if [[ "$DISK_PREFIX" != "null" ]]; then
-		disk_full=$DISK_USED$DISK_PREFIX$counter
+		disk_full=$DISK_USED$DISK_PREFIX$partition_number
 	else
-		disk_full=$DISK_USED$counter
+		disk_full=$DISK_USED$partition_number
 	fi
 
-	disk_create_partition $size $part_type $counter $DISK_USED
+  [ $do_format ] && disk_create_partition $size $part_type $partition_number $DISK_USED
 
 	if [[ "$luks" != "null" ]]; then
 		disk_setup_luks $disk_full $luks
-		disk_full="/dev/mapper/luks_root"
-		disk_create_partition $size $part_type $counter $disk_full
+		disk_full="/dev/mapper/$DISK_LUKS_NAME"
+		#disk_create_partition $size $part_type $partition_number $disk_full
 		dd if=/dev/zero of=$disk_full bs=512 count=1
 	fi
 
-	disk_format $disk_full $part_type
+	[ $do_create ] && disk_format $disk_full $part_type
 
 	case $part_type in
     lvm)
 			LVM_USED=1
 			vol_name="$(_jq $part '.vol_name')"
 
-			vgcreate $vol_name $disk_full
+			[ $do_create ] && vgcreate $vol_name $disk_full
 
 			for lvm_part in $(echo $part | jq -c '.partitions[]');
 			do
@@ -270,6 +274,8 @@ do
 				path=$(_jq $lvm_part '.path')
 				size=$(_jq $lvm_part '.size')
 				name=$(_jq $lvm_part '.name')
+				lv_create=$(_jq $lvm_part '.create')
+				lv_format=$(_jq $lvm_part '.format')
 				disk_full=/dev/mapper/$vol_name-$name
 
 				if [ "$size" == "ALL" ]; then
@@ -278,9 +284,9 @@ do
 					size="-L $size"
 				fi
 
-				lvcreate $size $vol_name -n $name
+				[ $lv_create ] && lvcreate $size $vol_name -n $name
 
-				disk_format $disk_full $part_type
+				[ $lv_format ] && disk_format $disk_full $part_type
 				mount_array[$path]=$disk_full
 			done
 			;;
@@ -290,17 +296,15 @@ do
 			mount_array[$path]=$disk_full
 			;;
 	esac
-
-	counter=$((counter+1))
 done
 
+echo ================ Mounting partitions ===================
 for path in $(printf '%s\n' "${!mount_array[@]}" | sort | tr '\n' ' ')
 do
 	disk_mount "${mount_array[$path]}" $path 
 done
 
 echo ================ Install base ===================
-
 pacstrap $INSTALL_PATH base base-devel linux linux-firmware 
 
 # list partition
@@ -313,7 +317,7 @@ genfstab -U -p $INSTALL_PATH >> $INSTALL_PATH/etc/fstab
 echo ================ Machine Info setting ===================
 arch_exec_params "pacman -S lvm2" "y"
 
-modprobe efivars
+modprobe efivars | true
 
 arch_exec "echo $MACHINE_NAME > /etc/hostname"
 
@@ -342,8 +346,7 @@ echo ================ Useful Package ===================
 arch_exec_params "pacman -S dhcpcd openssh git" "y"
 arch_exec "pacman -S netctl dialog netctl wpa_supplicant vi --noconfirm"
 
-if [ $INSTALL_ANSIBLE_LOCAL -eq 1 ]
-then
+if $INSTALL_ANSIBLE_LOCAL; then
   arch_exec_params "pacman -S ansible python" "y"
 fi
 
@@ -357,7 +360,7 @@ arch_exec "systemctl enable sshd.service"
 echo ================ Bootloader ===================
 arch_exec_params "pacman -S grub efibootmgr" "y"
 
-if [ $INSTALL_ON_USB_KEY -eq 1 ]
+if $INSTALL_ON_USB_KEY
 then
   arch_exec "grub-install --target=x86_64-efi --efi-directory=/boot --recheck --removable"
 else
@@ -365,7 +368,7 @@ else
 fi
  
 [ $LVM_USED -eq 1 ] && update_config_file /mnt/etc/default/grub "GRUB_PRELOAD_MODULES=\"" "lvm" "\""
-[ "$DISK_ENCRYPTED" != "" ] && update_config_file /mnt/etc/default/grub "GRUB_CMDLINE_LINUX=\"" "cryptdevice=$DISK_ENCRYPTED:luks_root" "\""
+[ "$DISK_ENCRYPTED" != "" ] && update_config_file /mnt/etc/default/grub "GRUB_CMDLINE_LINUX=\"" "cryptdevice=$DISK_ENCRYPTED:$DISK_LUKS_NAME" "\""
 
 arch_exec "grub-mkconfig -o /boot/grub/grub.cfg"
 
@@ -380,6 +383,6 @@ echo ================ Security ===================
 echo -e "\ntmpfs /tmp tmpfs defaults 0 0\n" >> /mnt/etc/fstab
 
 echo ================ Finishing ===================
-if [ $INSTALL_ANSIBLE_LOCAL -eq 1 ]; then git clone https://github.com/LT-code/archlinux-ansible  $INSTALL_PATH/root/ArchInstall-ansible; fi
+if $INSTALL_ANSIBLE_LOCAL; then git clone https://github.com/LT-code/archlinux-ansible  $INSTALL_PATH/root/ArchInstall-ansible; fi
 umount -R $INSTALL_PATH
 swapoff $SWAP_DISK_NAME
