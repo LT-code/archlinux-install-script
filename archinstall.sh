@@ -383,6 +383,9 @@ echo ================ Security ===================
 echo -e "\ntmpfs /tmp tmpfs defaults 0 0\n" >> /mnt/etc/fstab
 
 echo ================ Finishing ===================
-if $INSTALL_ANSIBLE_LOCAL; then git clone https://github.com/LT-code/archlinux-ansible  $INSTALL_PATH/root/ArchInstall-ansible; fi
+if $INSTALL_ANSIBLE_LOCAL; then 
+  git clone https://github.com/LT-code/archlinux-ansible  $INSTALL_PATH/root/ArchInstall-ansible
+  arch_exec "cd /root/ArchInstall-ansible/ && sh run-ansible.sh"
+fi
 umount -R $INSTALL_PATH
 swapoff $SWAP_DISK_NAME
