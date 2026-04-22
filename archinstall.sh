@@ -385,7 +385,7 @@ echo -e "\ntmpfs /tmp tmpfs defaults 0 0\n" >> /mnt/etc/fstab
 echo ================ Finishing ===================
 if $INSTALL_ANSIBLE_LOCAL; then 
   git clone https://github.com/LT-code/archlinux-ansible  $INSTALL_PATH/root/ArchInstall-ansible
-  sed "/\[arch\]/a $MACHINE_NAME ansible_connection=local" $INSTALL_PATH/root/ArchInstall-ansible/ansible/hosts
+  sed -i "/\[arch\]/a $MACHINE_NAME ansible_connection=local" $INSTALL_PATH/root/ArchInstall-ansible/ansible/hosts
   arch_exec "cd /root/ArchInstall-ansible/ && sh run-ansible.sh"
 fi
 umount -R $INSTALL_PATH
